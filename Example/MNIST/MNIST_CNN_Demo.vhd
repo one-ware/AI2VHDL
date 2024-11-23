@@ -125,13 +125,6 @@ ARCHITECTURE BEHAVIORAL OF CNN IS
     
 BEGIN
 
-
-
-    oStream_F <= oStream_P32;
-    oData_F   <= oData_P32;
-    iStream_1N.Data_CLK <= oStream_F.Data_CLK;
-
-    
     CNN_Convolution1 : CNN_Convolution
     GENERIC MAP (
         Input_Columns  => Layer_1_Columns,
@@ -260,6 +253,9 @@ BEGIN
         oData          => oData_P32
     );
     
+    oStream_F <= oStream_P32;
+    oData_F   <= oData_P32;
+
     PROCESS (oStream_F)
     BEGIN
         IF (rising_edge(oStream_F.Data_CLK)) THEN
@@ -268,6 +264,9 @@ BEGIN
             iData_1N              <= oData_F;
         END IF;
     END PROCESS;
+
+    
+    iStream_1N.Data_CLK <= oStream_F.Data_CLK;
     
     NN_Layer1 : NN_Layer
     GENERIC MAP (
