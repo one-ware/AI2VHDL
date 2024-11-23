@@ -85,7 +85,7 @@ BEGIN
                     wait for clk_period;
                     
                     -- Introduce a delay of 64 clock cycles
-                    for i in 0 to 64 loop
+                    for j in 0 to 64 loop
                         wait for clk_period;
                     end loop;
                 end loop;
