@@ -8,8 +8,8 @@ PACKAGE CNN_Config_Package is
   CONSTANT CNN_Value_Resolution       : NATURAL := 10;
   CONSTANT CNN_Weight_Resolution      : NATURAL := 8;
   CONSTANT CNN_Parameter_Resolution   : NATURAL := 8;
-  CONSTANT CNN_Input_Columns          : NATURAL := 448;
-  CONSTANT CNN_Input_Rows             : NATURAL := 448;
+  CONSTANT CNN_Input_Columns          : NATURAL := 28;
+  CONSTANT CNN_Input_Rows             : NATURAL := 28;
   CONSTANT CNN_Max_Filters            : NATURAL := 8;
   CONSTANT CNN_Value_Negative : NATURAL := 0;
   subtype CNN_Value_T       is NATURAL range 0 to 2**(CNN_Value_Resolution)-1;

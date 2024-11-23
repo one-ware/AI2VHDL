@@ -139,7 +139,7 @@ BEGIN
         Value_Cycles   => 1,
         Calc_Cycles    => 4,
         Filter_Cycles  => 4,
-        Expand_Cycles  => 240,
+        Expand_Cycles  => 56, -- 224/4
         Offset_In      => 0,
         Offset_Out     => Layer_1_Out_Offset-3,
         Offset         => Layer_1_Offset,
@@ -182,7 +182,7 @@ BEGIN
         Value_Cycles   => 4,
         Calc_Cycles    => 6,
         Filter_Cycles  => 6,
-        Expand_Cycles  => 960,
+        Expand_Cycles  => 224, -- 3*3*4*6 = 216 (224 for short delay) (most calculations per input from all layers)
         Offset_In      => Layer_1_Out_Offset,
         Offset_Out     => Layer_2_Out_Offset,
         Offset         => Layer_2_Offset,
@@ -225,7 +225,7 @@ BEGIN
         Value_Cycles   => 6,
         Calc_Cycles    => 8,
         Filter_Cycles  => 8,
-        Expand_Cycles  => 3840,
+        Expand_Cycles  => 896, -- 4*224
         Offset_In      => Layer_2_Out_Offset,
         Offset_Out     => Layer_3_Out_Offset,
         Offset         => Layer_3_Offset,
@@ -307,9 +307,9 @@ BEGIN
                     Prediction   <= max_number;
                     Probability  <= max;
                     Update       <= '1';
-                ELSE
-                    Update       <= '0';
                 END IF;
+            ELSE
+                Update       <= '0';
             END IF;
         END IF;
     END PROCESS;
