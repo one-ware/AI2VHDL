@@ -30,7 +30,7 @@ The MNIST example demonstrates a basic neural network for handwritten digit reco
 ### Components
 1. **Configuration File**: Define network architecture and parameters.
 2. **VHDL Implementation**: The network logic implemented for FPGA deployment.
-3. **Parameters File**: Pre-trained weights and biases for implementation.
+3. **Data File**: Pre-trained weights and biases for implementation.
 
 ---
 
