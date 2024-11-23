@@ -13,7 +13,8 @@ ENTITY CNN IS
         iData       : CNN_Values_T(0 downto 0);
 
         Prediction  : OUT NATURAL range 0 to NN_Layer_1_Outputs-1;
-        Probability : OUT CNN_Value_T
+        Probability : OUT CNN_Value_T;
+        Update      : OUT STD_LOGIC
     );
 END CNN;
 
@@ -306,6 +307,9 @@ BEGIN
                 IF (oCycle_1N = NN_Layer_1_Outputs-1) THEN
                     Prediction   <= max_number;
                     Probability  <= max;
+                    Update       <= '1';
+                ELSE
+                    Update       <= '0';
                 END IF;
             END IF;
         END IF;
