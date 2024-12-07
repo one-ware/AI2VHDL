@@ -5,7 +5,7 @@ use IEEE.numeric_std.all;
 
 
 PACKAGE CNN_Config_Package is
-  CONSTANT CNN_Value_Resolution       : NATURAL := 10;
+  CONSTANT CNN_Value_Resolution       : NATURAL := 8;
   CONSTANT CNN_Weight_Resolution      : NATURAL := 8;
   CONSTANT CNN_Parameter_Resolution   : NATURAL := 8;
   CONSTANT CNN_Input_Columns          : NATURAL := 28;
