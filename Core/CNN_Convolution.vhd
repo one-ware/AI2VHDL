@@ -28,8 +28,8 @@ ENTITY CNN_Convolution IS
         Filter_Delay   : NATURAL := 1;  --Cycles between Filters
         Expand         : BOOLEAN := true;  --Spreads Row data to maximize cycles per value (needs more RAM)
         Expand_Cycles  : NATURAL := 0;     --If Expand true: Sets Cycles for each pixel when expaned
-        Offset_In       : NATURAL := 0;  --Offset of Input Values
-        Offset_Out      : NATURAL := 0;  --Offset of Output Values
+        Offset_In       : INTEGER := 0;  --Offset of Input Values
+        Offset_Out      : INTEGER := 0;  --Offset of Output Values
         Offset         : INTEGER := 0;  --Offset for Weight values
         Weights        : CNN_Weights_T
     );
@@ -102,86 +102,91 @@ ARCHITECTURE BEHAVIORAL OF CNN_Convolution IS
     END COMPONENT;
     
     --Save Bias seperately in one constant -----
-    FUNCTION Init_Bias ( weights_in : CNN_Weights_T; filters : NATURAL; inputs : NATURAL) RETURN  CNN_Weights_T IS
-        VARIABLE Bias_Const    : CNN_Weights_T(0 to filters-1, 0 to 0);
-    BEGIN
-        FOR i in 0 to filters-1 LOOP
-            Bias_Const(i,0) := weights_in(i,inputs);
-        END LOOP;
-        
-        return Bias_Const;
-    END FUNCTION;
+    FUNCTION Init_Bias ( weights_in : CNN_Weights_T; filters : NATURAL; inputs : NATURAL; Offset_In : INTEGER) RETURN  CNN_Weights_T IS
+    VARIABLE Bias_Const    : CNN_Weights_T(0 to filters-1, 0 to 0);
+BEGIN
+    FOR i in 0 to filters-1 LOOP
+        if Offset_In >= 0 then
+            Bias_Const(i,0) := weights_in(i,inputs)/(2**Offset_In);
+        else
+            Bias_Const(i,0) := weights_in(i,inputs)*(2**(Offset_In*(-1)));
+        end if;
+    END LOOP;
+    
+    return Bias_Const;
+END FUNCTION;
 
-    CONSTANT Bias_Const    : CNN_Weights_T(0 to Filters-1, 0 to 0) := Init_Bias(Weights, Filters, matrix_values*Input_Values);
+CONSTANT Bias_Const    : CNN_Weights_T(0 to Filters-1, 0 to 0) := Init_Bias(Weights, Filters, matrix_values*Input_Values, Offset_In);
 
     --Save Weights in a ROM depending on the number of weights that are needed per calculation cycle
-    type ROM_Array is array (0 to Calc_Cycles*Matrix_Value_Cycles-1) of STD_LOGIC_VECTOR(Calc_Filters * Calc_Steps * CNN_Weight_Resolution - 1 downto 0);
+type ROM_Array is array (0 to Calc_Cycles*Matrix_Value_Cycles-1) of STD_LOGIC_VECTOR(Calc_Filters * Calc_Steps * CNN_Weight_Resolution - 1 downto 0);
 
-    FUNCTION Init_ROM ( weights_in : CNN_Weights_T; filters : NATURAL; inputs : NATURAL; elements : NATURAL; calc_filters : NATURAL; calc_steps : NATURAL) RETURN  ROM_Array IS
-        VARIABLE rom_reg : ROM_Array;
-        VARIABLE filters_cnt : NATURAL range 0 to filters := 0;
-        VARIABLE inputs_cnt  : NATURAL range 0 to inputs := 0;
-        VARIABLE element_cnt : NATURAL range 0 to elements := 0;
-        VARIABLE this_weight : STD_LOGIC_VECTOR(CNN_Weight_Resolution-1 downto 0);
-    BEGIN
+FUNCTION Init_ROM ( weights_in : CNN_Weights_T; filters : NATURAL; inputs : NATURAL; elements : NATURAL; calc_filters : NATURAL; calc_steps : NATURAL) RETURN  ROM_Array IS
+VARIABLE rom_reg : ROM_Array;
+VARIABLE filters_cnt : NATURAL range 0 to filters := 0;
+VARIABLE inputs_cnt  : NATURAL range 0 to inputs := 0;
+VARIABLE element_cnt : NATURAL range 0 to elements := 0;
+VARIABLE this_weight : STD_LOGIC_VECTOR(CNN_Weight_Resolution-1 downto 0);
+BEGIN
+    filters_cnt := 0;
+    inputs_cnt  := 0;
+    element_cnt := 0;
+    WHILE inputs_cnt < inputs LOOP
         filters_cnt := 0;
-        inputs_cnt  := 0;
-        element_cnt := 0;
-        WHILE inputs_cnt < inputs LOOP
-            filters_cnt := 0;
-            WHILE filters_cnt < filters LOOP
-                FOR s in 0 to calc_steps-1 LOOP
-                    FOR f in 0 to calc_filters-1 LOOP
-                        this_weight :=  STD_LOGIC_VECTOR(TO_SIGNED(weights_in(filters_cnt+f, inputs_cnt+s), CNN_Weight_Resolution));
-                        rom_reg(element_cnt)(CNN_Weight_Resolution*(1+s*calc_filters+f)-1 downto CNN_Weight_Resolution*(s*calc_filters+f)) := this_weight;
-                    END LOOP;
+        WHILE filters_cnt < filters LOOP
+            FOR s in 0 to calc_steps-1 LOOP
+                FOR f in 0 to calc_filters-1 LOOP
+                    this_weight :=  STD_LOGIC_VECTOR(TO_SIGNED(weights_in(filters_cnt+f, inputs_cnt+s), CNN_Weight_Resolution));
+                    rom_reg(element_cnt)(CNN_Weight_Resolution*(1+s*calc_filters+f)-1 downto CNN_Weight_Resolution*(s*calc_filters+f)) := this_weight;
                 END LOOP;
-                filters_cnt := filters_cnt + calc_filters;
-                element_cnt := element_cnt + 1;
             END LOOP;
-            inputs_cnt  := inputs_cnt + calc_steps;
+            filters_cnt := filters_cnt + calc_filters;
+            element_cnt := element_cnt + 1;
         END LOOP;
-        
-        return rom_reg;
-    END FUNCTION;
+        inputs_cnt  := inputs_cnt + calc_steps;
+    END LOOP;
+    
+    return rom_reg;
+END FUNCTION;
 
-    SIGNAL ROM : ROM_Array := Init_ROM(Weights, Filters, Input_Values*matrix_values, Calc_Cycles*Matrix_Value_Cycles, Calc_Filters, Calc_Steps);
-    SIGNAL ROM_Addr  : NATURAL range 0 to Calc_Cycles*Matrix_Value_Cycles-1;
-    SIGNAL ROM_Data  : STD_LOGIC_VECTOR(Calc_Filters * Calc_Steps * CNN_Weight_Resolution - 1 downto 0);
+SIGNAL ROM : ROM_Array := Init_ROM(Weights, Filters, Input_Values*matrix_values, Calc_Cycles*Matrix_Value_Cycles, Calc_Filters, Calc_Steps);
+SIGNAL ROM_Addr  : NATURAL range 0 to Calc_Cycles*Matrix_Value_Cycles-1;
+SIGNAL ROM_Data  : STD_LOGIC_VECTOR(Calc_Filters * Calc_Steps * CNN_Weight_Resolution - 1 downto 0);
 
-    CONSTANT value_max     : NATURAL := 2**(CNN_Value_Resolution)-1;
+CONSTANT value_max     : NATURAL := 2**(CNN_Value_Resolution)-1;
     --Maximum bits for sum of convolution
-    CONSTANT bits_max      : NATURAL := CNN_Value_Resolution + max_val(Offset, 0) + integer(ceil(log2(real(matrix_values * Input_Values + 1))));
+CONSTANT bits_max      : NATURAL := CNN_Value_Resolution + max_val(Offset, 0) + integer(ceil(log2(real(matrix_values * Input_Values + 1))));
 
     --RAM for colvolution sum
-    type sum_set_t is array (0 to Calc_Filters-1) of SIGNED(bits_max downto 0);
-    type sum_ram_t is array (natural range <>) of sum_set_t;
-    SIGNAL SUM_RAM      : sum_ram_t(0 to Calc_Cycles-1) := (others => (others => (others => '0')));
-    SIGNAL SUM_Rd_Addr  : NATURAL range 0 to Calc_Cycles-1;
-    SIGNAL SUM_Rd_Data  : sum_set_t;
-    SIGNAL SUM_Wr_Addr  : NATURAL range 0 to Calc_Cycles-1;
-    SIGNAL SUM_Wr_Data  : sum_set_t;
-    SIGNAL SUM_Wr_Ena   : STD_LOGIC := '1';
+type sum_set_t is array (0 to Calc_Filters-1) of SIGNED(bits_max downto 0);
+type sum_ram_t is array (natural range <>) of sum_set_t;
+SIGNAL SUM_RAM      : sum_ram_t(0 to Calc_Cycles-1) := (others => (others => (others => '0')));
+SIGNAL SUM_Rd_Addr  : NATURAL range 0 to Calc_Cycles-1;
+SIGNAL SUM_Rd_Data  : sum_set_t;
+SIGNAL SUM_Wr_Addr  : NATURAL range 0 to Calc_Cycles-1;
+SIGNAL SUM_Wr_Data  : sum_set_t;
+SIGNAL SUM_Wr_Ena   : STD_LOGIC := '1';
 
     --RAM for output values
-    CONSTANT OUT_RAM_Elements : NATURAL := min_val(Calc_Cycles,Filter_Cycles);
-    type OUT_set_t is array (0 to Filters/OUT_RAM_Elements-1) of SIGNED(CNN_Value_Resolution downto 0);
-    type OUT_ram_t is array (natural range <>) of OUT_set_t;
-    SIGNAL OUT_RAM      : OUT_ram_t(0 to OUT_RAM_Elements-1) := (others => (others => (others => '0')));
-    SIGNAL OUT_Rd_Addr  : NATURAL range 0 to OUT_RAM_Elements-1;
-    SIGNAL OUT_Rd_Data  : OUT_set_t;
-    SIGNAL OUT_Wr_Addr  : NATURAL range 0 to OUT_RAM_Elements-1;
-    SIGNAL OUT_Wr_Data  : OUT_set_t;
-    SIGNAL OUT_Wr_Ena   : STD_LOGIC := '1';
-    
-    SIGNAL Calc_En            : BOOLEAN := false; --True while convolution is calculated
-    SIGNAL Filter_Bias_Reg    : NATURAL range 0 to Calc_Cycles-1 := 0; --Current filter for the bias calculation
-    SIGNAL Add_Bias           : BOOLEAN := false; --True if convolution is calculated and bias can be added
-    SIGNAL Last_Input         : STD_LOGIC;        --True if the convolution is done and the output can be sent to next layer
-    SIGNAL Matrix_Data_Reg    : CNN_Values_T((Input_Values*matrix_values)/Matrix_Value_Cycles-1 downto 0);
-    SIGNAL Out_Filter_Cnt_Reg : NATURAL range 0 to Filter_Cycles-1 := Filter_Cycles-1;  --Current Filter to Output that is one cycle delayed, so the output value can be read from RAM
-    SIGNAL Out_Delay_Cnt      : NATURAL range 0 to Filter_Delay-1 := Filter_Delay-1;    --Counter to delay the output values for one convolution that are sent one after another
-    SIGNAL Out_Ready          : STD_LOGIC;        --True if the output data can be read from the RAM
+CONSTANT OUT_RAM_Elements : NATURAL := min_val(Calc_Cycles,Filter_Cycles);
+type OUT_set_t is array (0 to Filters/OUT_RAM_Elements-1) of SIGNED(CNN_Value_Resolution downto 0);
+type OUT_ram_t is array (natural range <>) of OUT_set_t;
+SIGNAL OUT_RAM      : OUT_ram_t(0 to OUT_RAM_Elements-1) := (others => (others => (others => '0')));
+SIGNAL OUT_Rd_Addr  : NATURAL range 0 to OUT_RAM_Elements-1;
+SIGNAL OUT_Rd_Data  : OUT_set_t;
+SIGNAL OUT_Wr_Addr  : NATURAL range 0 to OUT_RAM_Elements-1;
+SIGNAL OUT_Wr_Data  : OUT_set_t;
+SIGNAL OUT_Wr_Ena   : STD_LOGIC := '1';
+
+SIGNAL Calc_En            : BOOLEAN := false; --True while convolution is calculated
+SIGNAL Filter_Bias_Reg    : NATURAL range 0 to Calc_Cycles-1 := 0; --Current filter for the bias calculation
+SIGNAL Add_Bias           : BOOLEAN := false; --True if convolution is calculated and bias can be added
+SIGNAL Last_Input         : STD_LOGIC;        --True if the convolution is done and the output can be sent to next layer
+SIGNAL Last_Reg           : STD_LOGIC := '0';
+SIGNAL Matrix_Data_Reg    : CNN_Values_T((Input_Values*matrix_values)/Matrix_Value_Cycles-1 downto 0);
+SIGNAL Out_Filter_Cnt_Reg : NATURAL range 0 to Filter_Cycles-1 := Filter_Cycles-1;  --Current Filter to Output that is one cycle delayed, so the output value can be read from RAM
+SIGNAL Out_Delay_Cnt      : NATURAL range 0 to Filter_Delay-1 := Filter_Delay-1;    --Counter to delay the output values for one convolution that are sent one after another
+SIGNAL Out_Ready          : STD_LOGIC;        --True if the output data can be read from the RAM
 
 BEGIN
     
@@ -352,6 +357,7 @@ BEGIN
                 END LOOP;
             END LOOP;
             
+            Last_Reg   <= '0';
             Last_Input <= '0';
             Add_Bias   <= false;
             
@@ -437,7 +443,10 @@ BEGIN
                 IF (Cycle_Reg = Matrix_Value_Cycles-1) THEN
                     --Send output data after all filters and all steps of the convolution are done
                     IF (Filter_Reg = Calc_Cycles-1) THEN
-                        Last_Input <= '1';
+                        IF Last_Reg = '0' THEN
+                            Last_Input <= '1';
+                        END IF;
+                        Last_Reg   <= '1';
                     END IF;
                     Sum_Reg  := sum;
                     Add_Bias <= true;
@@ -479,7 +488,7 @@ BEGIN
                     END IF;
                 END LOOP;
                 
-                oStream.Filter     <= Out_Filter_Cnt_Reg*(Out_Filters);
+                oStream.Filter     <= Out_Filter_Cnt_Reg;
                 oStream.Data_Valid <= '1';
                 oStream.Row        <= Out_Row;
                 oStream.Column     <= Out_Column;

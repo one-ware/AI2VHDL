@@ -105,9 +105,9 @@ BEGIN
                 Column_Cnt             := Column_Cnt + 1;
                 Filter_Cnt             := 0;
                 oStream_Reg.Data_Valid <= '1';
-            ELSIF (Filter_Cnt < (Input_Cycles-1)*(Input_Values/Input_Cycles)) THEN
+            ELSIF (Filter_Cnt < (Input_Cycles-1)) THEN
                 --Count the filter output for the input filter cycles
-                Filter_Cnt             := Filter_Cnt + Input_Values/Input_Cycles;
+                Filter_Cnt             := Filter_Cnt + 1;
             ELSE
                 oStream_Reg.Data_Valid <= '0';
             END IF;

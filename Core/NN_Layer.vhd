@@ -18,8 +18,8 @@ ENTITY NN_Layer IS
         Calc_Cycles     : NATURAL := 1;  --Second priority after Cycle_Reg Cycles to make use of more cycles for calculation
         Output_Cycles   : NATURAL := 1;  --Output data in multiple cycles, so the next dense layer can calculate the neuron in multiple cycles
         Output_Delay    : NATURAL := 1;  --Cycles between Output Values
-        Offset_In       : NATURAL := 0;  --Offset of Cycle_Reg Values
-        Offset_Out      : NATURAL := 0;  --Offset of Output Values
+        Offset_In       : INTEGER := 0;  --Offset of Cycle_Reg Values
+        Offset_Out      : INTEGER := 0;  --Offset of Output Values
         Offset          : INTEGER := 0;
         Weights         : CNN_Weights_T
     );
@@ -41,86 +41,90 @@ ARCHITECTURE BEHAVIORAL OF NN_Layer IS
     CONSTANT Offset_Diff   : INTEGER := Offset_Out-Offset_In;  --Relative output value offset
     
      --Save Bias seperately in one constant -----
-    FUNCTION Init_Bias ( weights_in : CNN_Weights_T; filters : NATURAL; inputs : NATURAL) RETURN  CNN_Weights_T IS
-        VARIABLE Bias_Const    : CNN_Weights_T(0 to filters-1, 0 to 0);
-    BEGIN
-        FOR i in 0 to filters-1 LOOP
-            Bias_Const(i,0) := weights_in(i,inputs);
-        END LOOP;
-        
-        return Bias_Const;
-    END FUNCTION;
+    FUNCTION Init_Bias ( weights_in : CNN_Weights_T; filters : NATURAL; inputs : NATURAL; Offset_In : INTEGER) RETURN  CNN_Weights_T IS
+    VARIABLE Bias_Const    : CNN_Weights_T(0 to filters-1, 0 to 0);
+BEGIN
+    FOR i in 0 to filters-1 LOOP
+        if Offset_In >= 0 then
+            Bias_Const(i,0) := weights_in(i,inputs)/(2**Offset_In);
+        else
+            Bias_Const(i,0) := weights_in(i,inputs)*(2**(Offset_In*(-1)));
+        end if;
+    END LOOP;
     
-    CONSTANT Bias_Const    : CNN_Weights_T(0 to Outputs-1, 0 to 0) := Init_Bias(Weights, Outputs, Inputs);
-    
+    return Bias_Const;
+END FUNCTION;
+
+CONSTANT Bias_Const    : CNN_Weights_T(0 to Outputs-1, 0 to 0) := Init_Bias(Weights, Outputs, Inputs, Offset_In);
+
     --Save Weights in a ROM depending on the number of weights that are needed per calculation cycle
-    type ROM_Array is array (0 to Calc_Cycles*Input_Cycles-1) of STD_LOGIC_VECTOR(Calc_Outputs * Calc_Steps * CNN_Weight_Resolution - 1 downto 0);
-    
-    FUNCTION Init_ROM ( weights_in : CNN_Weights_T; filters : NATURAL; inputs : NATURAL; elements : NATURAL; calc_filters : NATURAL; calc_steps : NATURAL) RETURN  ROM_Array IS
-        VARIABLE rom_reg : ROM_Array;
-        VARIABLE filters_cnt : NATURAL range 0 to filters := 0;
-        VARIABLE inputs_cnt  : NATURAL range 0 to inputs := 0;
-        VARIABLE element_cnt : NATURAL range 0 to elements := 0;
-        VARIABLE this_weight : STD_LOGIC_VECTOR(CNN_Weight_Resolution-1 downto 0);
-    BEGIN
+type ROM_Array is array (0 to Calc_Cycles*Input_Cycles-1) of STD_LOGIC_VECTOR(Calc_Outputs * Calc_Steps * CNN_Weight_Resolution - 1 downto 0);
+
+FUNCTION Init_ROM ( weights_in : CNN_Weights_T; filters : NATURAL; inputs : NATURAL; elements : NATURAL; calc_filters : NATURAL; calc_steps : NATURAL) RETURN  ROM_Array IS
+VARIABLE rom_reg : ROM_Array;
+VARIABLE filters_cnt : NATURAL range 0 to filters := 0;
+VARIABLE inputs_cnt  : NATURAL range 0 to inputs := 0;
+VARIABLE element_cnt : NATURAL range 0 to elements := 0;
+VARIABLE this_weight : STD_LOGIC_VECTOR(CNN_Weight_Resolution-1 downto 0);
+BEGIN
+    filters_cnt := 0;
+    inputs_cnt  := 0;
+    element_cnt := 0;
+    WHILE inputs_cnt < inputs LOOP
         filters_cnt := 0;
-        inputs_cnt  := 0;
-        element_cnt := 0;
-        WHILE inputs_cnt < inputs LOOP
-            filters_cnt := 0;
-            WHILE filters_cnt < filters LOOP
-                FOR s in 0 to calc_steps-1 LOOP
-                    FOR f in 0 to calc_filters-1 LOOP
-                        this_weight :=  STD_LOGIC_VECTOR(TO_SIGNED(weights_in(filters_cnt+f, inputs_cnt+s), CNN_Weight_Resolution));
-                        rom_reg(element_cnt)(CNN_Weight_Resolution*(1+s*calc_filters+f)-1 downto CNN_Weight_Resolution*(s*calc_filters+f)) := this_weight;
-                    END LOOP;
+        WHILE filters_cnt < filters LOOP
+            FOR s in 0 to calc_steps-1 LOOP
+                FOR f in 0 to calc_filters-1 LOOP
+                    this_weight :=  STD_LOGIC_VECTOR(TO_SIGNED(weights_in(filters_cnt+f, inputs_cnt+s), CNN_Weight_Resolution));
+                    rom_reg(element_cnt)(CNN_Weight_Resolution*(1+s*calc_filters+f)-1 downto CNN_Weight_Resolution*(s*calc_filters+f)) := this_weight;
                 END LOOP;
-                filters_cnt := filters_cnt + calc_filters;
-                element_cnt := element_cnt + 1;
             END LOOP;
-            inputs_cnt  := inputs_cnt + calc_steps;
+            filters_cnt := filters_cnt + calc_filters;
+            element_cnt := element_cnt + 1;
         END LOOP;
-        
-        return rom_reg;
-    END FUNCTION;
+        inputs_cnt  := inputs_cnt + calc_steps;
+    END LOOP;
     
-    SIGNAL ROM : ROM_Array := Init_ROM(Weights, Outputs, Inputs, Calc_Cycles*Input_Cycles, Calc_Outputs, Calc_Steps);
-    SIGNAL ROM_Addr  : NATURAL range 0 to Calc_Cycles*Input_Cycles-1;
-    SIGNAL ROM_Data  : STD_LOGIC_VECTOR(Calc_Outputs * Calc_Steps * CNN_Weight_Resolution - 1 downto 0);
-    
-    CONSTANT value_max     : NATURAL := 2**(CNN_Value_Resolution)-1;
+    return rom_reg;
+END FUNCTION;
+
+SIGNAL ROM : ROM_Array := Init_ROM(Weights, Outputs, Inputs, Calc_Cycles*Input_Cycles, Calc_Outputs, Calc_Steps);
+SIGNAL ROM_Addr  : NATURAL range 0 to Calc_Cycles*Input_Cycles-1;
+SIGNAL ROM_Data  : STD_LOGIC_VECTOR(Calc_Outputs * Calc_Steps * CNN_Weight_Resolution - 1 downto 0);
+
+CONSTANT value_max     : NATURAL := 2**(CNN_Value_Resolution)-1;
     --Maximum bits for sum of convolution
-    CONSTANT bits_max      : NATURAL := CNN_Value_Resolution + max_val(Offset, 0) + integer(ceil(log2(real(Inputs + 1))));
-    
+CONSTANT bits_max      : NATURAL := CNN_Value_Resolution + max_val(Offset, 0) + integer(ceil(log2(real(Inputs + 1))));
+
     --RAM for colvolution sum
-    type sum_set_t is array (0 to Calc_Outputs-1) of SIGNED(bits_max downto 0);
-    type sum_ram_t is array (natural range <>) of sum_set_t;
-    SIGNAL SUM_RAM : sum_ram_t(0 to Calc_Cycles-1) := (others => (others => (others => '0')));
-    SIGNAL SUM_Rd_Addr  : NATURAL range 0 to Calc_Cycles-1;
-    SIGNAL SUM_Rd_Data  : sum_set_t;
-    SIGNAL SUM_Wr_Addr  : NATURAL range 0 to Calc_Cycles-1;
-    SIGNAL SUM_Wr_Data  : sum_set_t;
-    SIGNAL SUM_Wr_Ena   : STD_LOGIC := '1';
-    
+type sum_set_t is array (0 to Calc_Outputs-1) of SIGNED(bits_max downto 0);
+type sum_ram_t is array (natural range <>) of sum_set_t;
+SIGNAL SUM_RAM : sum_ram_t(0 to Calc_Cycles-1) := (others => (others => (others => '0')));
+SIGNAL SUM_Rd_Addr  : NATURAL range 0 to Calc_Cycles-1;
+SIGNAL SUM_Rd_Data  : sum_set_t;
+SIGNAL SUM_Wr_Addr  : NATURAL range 0 to Calc_Cycles-1;
+SIGNAL SUM_Wr_Data  : sum_set_t;
+SIGNAL SUM_Wr_Ena   : STD_LOGIC := '1';
+
     --RAM for output values
-    CONSTANT OUT_RAM_Elements : NATURAL := min_val(Calc_Cycles,Output_Cycles);
-    type OUT_set_t is array (0 to Outputs/OUT_RAM_Elements-1) of SIGNED(CNN_Value_Resolution downto 0);
-    type OUT_ram_t is array (natural range <>) of OUT_set_t;
-    SIGNAL OUT_RAM      : OUT_ram_t(0 to OUT_RAM_Elements-1) := (others => (others => (others => '0')));
-    SIGNAL OUT_Rd_Addr  : NATURAL range 0 to OUT_RAM_Elements-1;
-    SIGNAL OUT_Rd_Data  : OUT_set_t;
-    SIGNAL OUT_Wr_Addr  : NATURAL range 0 to OUT_RAM_Elements-1;
-    SIGNAL OUT_Wr_Data  : OUT_set_t;
-    SIGNAL OUT_Wr_Ena   : STD_LOGIC := '1';
-    
-    SIGNAL Calc_En           : BOOLEAN := false;  --True while neural net is calculated
-    SIGNAL Output_Bias_Reg   : NATURAL range 0 to Calc_Cycles := 0; --Current output for the bias calculation
-    SIGNAL Add_Bias          : BOOLEAN := false;  --True if sum is calculated and bias can be added
-    SIGNAL Last_Input        : STD_LOGIC;         --True if the calculation is done and the output can be sent to next layer
-    SIGNAL iData_Reg         : CNN_Values_T(Inputs/Input_Cycles-1 downto 0);
-    SIGNAL Out_Cycle_Cnt_Reg : NATURAL range 0 to Output_Cycles-1 := Output_Cycles-1;  --Current Output that is one cycle delayed, so the output value can be read from RAM
-    SIGNAL Out_Delay_Cnt     : NATURAL range 0 to Output_Delay-1 := Output_Delay-1;    --Counter to delay the output values that are sent one after another
-    SIGNAL Out_Ready         : STD_LOGIC;         --True if the output data can be read from the RAM
+CONSTANT OUT_RAM_Elements : NATURAL := min_val(Calc_Cycles,Output_Cycles);
+type OUT_set_t is array (0 to Outputs/OUT_RAM_Elements-1) of SIGNED(CNN_Value_Resolution-CNN_Value_Negative downto 0);
+type OUT_ram_t is array (natural range <>) of OUT_set_t;
+SIGNAL OUT_RAM      : OUT_ram_t(0 to OUT_RAM_Elements-1) := (others => (others => (others => '0')));
+SIGNAL OUT_Rd_Addr  : NATURAL range 0 to OUT_RAM_Elements-1;
+SIGNAL OUT_Rd_Data  : OUT_set_t;
+SIGNAL OUT_Wr_Addr  : NATURAL range 0 to OUT_RAM_Elements-1;
+SIGNAL OUT_Wr_Data  : OUT_set_t;
+SIGNAL OUT_Wr_Ena   : STD_LOGIC := '1';
+
+SIGNAL Calc_En           : BOOLEAN := false;  --True while neural net is calculated
+SIGNAL Output_Bias_Reg   : NATURAL range 0 to Calc_Cycles := 0; --Current output for the bias calculation
+SIGNAL Add_Bias          : BOOLEAN := false;  --True if sum is calculated and bias can be added
+SIGNAL Last_Input        : STD_LOGIC;         --True if the calculation is done and the output can be sent to next layer
+SIGNAL iData_Reg         : CNN_Values_T(Inputs/Input_Cycles-1 downto 0);
+SIGNAL Out_Cycle_Cnt_Reg : NATURAL range 0 to Output_Cycles-1 := Output_Cycles-1;  --Current Output that is one cycle delayed, so the output value can be read from RAM
+SIGNAL Out_Delay_Cnt     : NATURAL range 0 to Output_Delay-1 := Output_Delay-1;    --Counter to delay the output values that are sent one after another
+SIGNAL Out_Ready         : STD_LOGIC;         --True if the output data can be read from the RAM
 
 BEGIN
     oStream.Data_CLK <= iStream.Data_CLK;
@@ -172,7 +176,7 @@ BEGIN
     VARIABLE Weights_Buf : CNN_Weights_T(0 to Calc_Outputs-1, 0 to Calc_Steps-1);
     
     --Variables to write calculated outputs into the Out RAM
-    type     Act_sum_t is array (Calc_Outputs-1 downto 0) of SIGNED(CNN_Value_Resolution downto 0);
+    type     Act_sum_t is array (Calc_Outputs-1 downto 0) of SIGNED(CNN_Value_Resolution-CNN_Value_Negative downto 0);
     VARIABLE Act_sum : Act_sum_t;
     CONSTANT Act_sum_buf_cycles : NATURAL := Calc_Cycles/OUT_RAM_Elements;
     type     Act_sum_buf_t is array (Act_sum_buf_cycles-1 downto 0) of Act_sum_t;
@@ -216,15 +220,15 @@ BEGIN
                     
                     --Apply Activation function
                     IF (Activation = relu) THEN
-                        Act_sum(o) := resize(relu_f(Sum_Reg(o), value_max), CNN_Value_Resolution+1);
+                        Act_sum(o) := resize(relu_f(Sum_Reg(o), value_max), CNN_Value_Resolution+1-CNN_Value_Negative);
                     ELSIF (Activation = linear) THEN
-                        Act_sum(o) := resize(linear_f(Sum_Reg(o), value_max), CNN_Value_Resolution+1);
+                        Act_sum(o) := resize(linear_f(Sum_Reg(o), value_max), CNN_Value_Resolution+1-CNN_Value_Negative);
                     ELSIF (Activation = leaky_relu) THEN
-                        Act_sum(o) := resize(leaky_relu_f(Sum_Reg(o), value_max, CNN_Value_Resolution + max_val(Offset, 0) + integer(ceil(log2(real(Inputs + 1))))), CNN_Value_Resolution+1);
+                        Act_sum(o) := resize(leaky_relu_f(Sum_Reg(o), value_max, CNN_Value_Resolution + max_val(Offset, 0) + integer(ceil(log2(real(Inputs + 1))))), CNN_Value_Resolution+1-CNN_Value_Negative);
                     ELSIF (Activation = step_func) THEN
-                        Act_sum(o) := resize(step_f(Sum_Reg(o)), CNN_Value_Resolution+1);
+                        Act_sum(o) := resize(step_f(Sum_Reg(o)), CNN_Value_Resolution+1-CNN_Value_Negative);
                     ELSIF (Activation = sign_func) THEN
-                        Act_sum(o) := resize(sign_f(Sum_Reg(o)), CNN_Value_Resolution+1);
+                        Act_sum(o) := resize(sign_f(Sum_Reg(o)), CNN_Value_Resolution+1-CNN_Value_Negative);
                     END IF;
                 END LOOP;
                 

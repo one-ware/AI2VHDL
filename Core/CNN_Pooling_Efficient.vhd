@@ -110,7 +110,7 @@ BEGIN
                 iStream_Reg.Filter     <= iStream.Filter;
                 iStream_Reg.Data_Valid <= '1';
                 
-                RAM_Addr_Out           <= (iStream.Column/Filter_Columns)*Input_Cycles+(iStream.Filter/Calc_Steps);
+                RAM_Addr_Out           <= (iStream.Column/Filter_Columns)*Input_Cycles+iStream.Filter;
             else
                 iStream_Reg.Data_Valid <= '0';
             end if;
@@ -202,7 +202,7 @@ BEGIN
                         oData(i) <= to_integer(OUT_Rd_Data(i));
                     END LOOP;
                     
-                    oStream.Filter     <= Out_Value_Cnt_Reg*Calc_Steps;
+                    oStream.Filter     <= Out_Value_Cnt_Reg;
                     oStream.Data_Valid <= '1';
                 ELSE
                     oStream.Data_Valid <= '0';
