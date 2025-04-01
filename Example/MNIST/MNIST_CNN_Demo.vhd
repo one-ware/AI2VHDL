@@ -141,7 +141,10 @@ BEGIN
         Filter_Cycles  => 4,
         Expand_Cycles  => 56, -- 224/4
         Offset_In      => 0,
-        Offset_Out     => Layer_1_Out_Offset-3,
+        Offset_Out     => Layer_1_Out_Offset-1, 
+        -- The offset is calulated with the highest value while training
+        -- By reducing the offset, smaller values are less likely to be clipped due to quantization
+        -- To reduce the loss of information, the value resolution can be increased
         Offset         => Layer_1_Offset,
         Weights        => Layer_1
     ) PORT MAP (
