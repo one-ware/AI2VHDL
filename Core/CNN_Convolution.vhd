@@ -100,17 +100,20 @@ ARCHITECTURE BEHAVIORAL OF CNN_Convolution IS
             oInput  : BUFFER NATURAL range 0 to Value_Cycles-1
         );
     END COMPONENT;
+
+    CONSTANT Bias_Offset            : INTEGER := Offset_In-Offset-CNN_Sum_Offset;  --General Offset for sum
+    --CONSTANT Bias_Offset            : INTEGER := Offset_In-Offset;  --Test Bias without offset
+    CONSTANT Bias_Offset_Fixed      : INTEGER := max_val(Bias_Offset, 0);          --Offset, with max weight bits in mind
+    CONSTANT Sum_Offset_Bias        : INTEGER := Bias_Offset_Fixed-Bias_Offset; --Offset for sum for bias addition
+    --CONSTANT Sum_Offset_Bias        : INTEGER := CNN_Sum_Offset;   --Test Bias without offset
+    CONSTANT Bias_Offset_Correction : INTEGER := CNN_Sum_Offset - Sum_Offset_Bias; --Offset to correct after sum
     
     --Save Bias seperately in one constant -----
     FUNCTION Init_Bias ( weights_in : CNN_Weights_T; filters : NATURAL; inputs : NATURAL; Offset_In : INTEGER) RETURN  CNN_Weights_T IS
     VARIABLE Bias_Const    : CNN_Weights_T(0 to filters-1, 0 to 0);
 BEGIN
     FOR i in 0 to filters-1 LOOP
-        if Offset_In >= 0 then
-            Bias_Const(i,0) := weights_in(i,inputs)/(2**Offset_In);
-        else
-            Bias_Const(i,0) := weights_in(i,inputs)*(2**(Offset_In*(-1)));
-        end if;
+        Bias_Const(i,0) := adjust_offset(weights_in(i,inputs), Bias_Offset_Fixed);
     END LOOP;
     
     return Bias_Const;
@@ -155,7 +158,7 @@ SIGNAL ROM_Data  : STD_LOGIC_VECTOR(Calc_Filters * Calc_Steps * CNN_Weight_Resol
 
 CONSTANT value_max     : NATURAL := 2**(CNN_Value_Resolution)-1;
     --Maximum bits for sum of convolution
-CONSTANT bits_max      : NATURAL := CNN_Value_Resolution + max_val(Offset, 0) + integer(ceil(log2(real(matrix_values * Input_Values + 1))));
+CONSTANT bits_max      : NATURAL := CNN_Value_Resolution + max_val(Offset, 0) + integer(ceil(log2(real(matrix_values * Input_Values + 1)))) + CNN_Sum_Offset;
 
     --RAM for colvolution sum
 type sum_set_t is array (0 to Calc_Filters-1) of SIGNED(bits_max downto 0);
@@ -287,6 +290,7 @@ BEGIN
 
     VARIABLE Matrix_Valid_Reg   : STD_LOGIC; --Save last value of Matrix_Stream.Data_CLK to detect a rising edge
     VARIABLE Weights_Buf        : CNN_Weights_T(0 to Calc_Filters-1, 0 to matrix_values*Input_Values/Matrix_Value_Cycles-1);
+    type Test_Array        is array (NATURAL range <>, NATURAL range <>) of INTEGER;
 
     --Variables to write calculated outputs into the Out RAM
     type     Act_sum_t is array (Calc_Filters-1 downto 0) of SIGNED(CNN_Value_Resolution downto 0);
@@ -366,17 +370,18 @@ BEGIN
                 --Output values for multiple filters can be calculated
                 FOR o in 0 to Calc_Filters-1 LOOP
                     --Add bias with weight offset
-                    IF (Offset >= 0) THEN
-                        Sum_Reg(o) := resize(Sum_Reg(o) + resize(shift_left (to_signed(Bias_Const(o+Filter_Bias_Reg*Calc_Filters, 0), CNN_Weight_Resolution+Offset), Offset),bits_max+1),bits_max+1);
+                    --Sum_Reg(o) := resize(Sum_Reg(o) + resize(shift_with_rounding(to_signed(Bias_Const(o+Filter_Bias_Reg*Calc_Filters, 0), CNN_Weight_Resolution+Offset), Offset*(-1)),bits_max+1),bits_max+1);
+                    IF CNN_Rounding(1) = '1' THEN
+                        Sum_Reg(o) := resize(shift_with_rounding(Sum_Reg(o), Sum_Offset_Bias) + to_signed(Bias_Const(o+Filter_Bias_Reg*Calc_Filters, 0), bits_max+1),bits_max+1);
                     ELSE
-                        Sum_Reg(o) := resize(Sum_Reg(o) + resize(shift_right(to_signed(Bias_Const(o+Filter_Bias_Reg*Calc_Filters, 0), CNN_Weight_Resolution), abs(Offset)),bits_max+1),bits_max+1);
+                        Sum_Reg(o) := resize(shift_bits(Sum_Reg(o), Sum_Offset_Bias) + to_signed(Bias_Const(o+Filter_Bias_Reg*Calc_Filters, 0), bits_max+1),bits_max+1);
                     END IF;
                     
                     --Apply output offset with relative offset from this and last layer
-                    IF (Offset_Diff > 0) THEN
-                        Sum_Reg(o) := shift_right(Sum_Reg(o), Offset_Diff);
-                    ELSIF (Offset_Diff < 0) THEN
-                        Sum_Reg(o) := shift_left(Sum_Reg(o), abs(Offset_Diff));
+                    IF CNN_Rounding(2) = '1' THEN
+                        Sum_Reg(o) := shift_with_rounding(Sum_Reg(o), Offset_Diff+Bias_Offset_Correction);
+                    ELSE
+                        Sum_Reg(o) := shift_bits(Sum_Reg(o), Offset_Diff+Bias_Offset_Correction);
                     END IF;
                     
                     --Apply Activation function
@@ -430,7 +435,12 @@ BEGIN
                 --Calculate the convolution with the input data, weights and the weight offset
                 FOR o in 0 to Calc_Filters-1 LOOP
                     FOR i in 0 to (Input_Values*matrix_values/Matrix_Value_Cycles)-1 LOOP
-                        sum(o) := resize(sum(o) + resize(shift_right(to_signed(Matrix_Data_Reg(i) * Weights_Buf(o, i) + (2**(CNN_Weight_Resolution-Offset-2)), CNN_Value_Resolution+CNN_Weight_Resolution), CNN_Weight_Resolution-Offset-1),bits_max+1),bits_max+1);
+                        --sum(o) := resize(sum(o) + resize(shift_bits(to_signed(Matrix_Data_Reg(i) * Weights_Buf(o, i) + (2**(CNN_Weight_Resolution-Offset-2)), CNN_Value_Resolution+CNN_Weight_Resolution), CNN_Weight_Resolution-Offset-1),bits_max+1),bits_max+1);
+                        IF CNN_Rounding(0) = '1' THEN
+                            sum(o) := resize(sum(o) + resize(shift_with_rounding(to_signed(Matrix_Data_Reg(i) * Weights_Buf(o, i), CNN_Value_Resolution+CNN_Weight_Resolution), CNN_Weight_Resolution-Offset-1-CNN_Sum_Offset),bits_max+1),bits_max+1);
+                        ELSE
+                            sum(o) := resize(sum(o) + resize(shift_bits(to_signed(Matrix_Data_Reg(i) * Weights_Buf(o, i), CNN_Value_Resolution+CNN_Weight_Resolution), CNN_Weight_Resolution-Offset-1-CNN_Sum_Offset),bits_max+1),bits_max+1);
+                        END IF;
                     END LOOP;
                 END LOOP;
                 
@@ -448,7 +458,10 @@ BEGIN
                         END IF;
                         Last_Reg   <= '1';
                     END IF;
-                    Sum_Reg  := sum;
+                    --For o in 0 to Calc_Filters-1 LOOP
+                    --    Sum_Reg(o)  := shift_with_rounding(sum(o), CNN_Sum_Offset);
+                    --END LOOP;
+                    Sum_Reg := sum;
                     Add_Bias <= true;
                 END IF;
                 

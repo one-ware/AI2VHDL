@@ -40,16 +40,20 @@ ARCHITECTURE BEHAVIORAL OF NN_Layer IS
     CONSTANT Out_Values    : NATURAL := Outputs/Output_Cycles; --Outputs that are sent at once as output data
     CONSTANT Offset_Diff   : INTEGER := Offset_Out-Offset_In;  --Relative output value offset
     
+    CONSTANT Bias_Offset            : INTEGER := Offset_In-Offset-CNN_Sum_Offset;  --General Offset for sum
+    --CONSTANT Bias_Offset            : INTEGER := Offset_In-Offset;  --Test Bias without offset
+    CONSTANT Bias_Offset_Fixed      : INTEGER := max_val(Bias_Offset, 0);          --Offset, with max weight bits in mind
+    CONSTANT Sum_Offset_Bias        : INTEGER := Bias_Offset_Fixed-Bias_Offset; --Offset for sum for bias addition
+    --CONSTANT Sum_Offset_Bias        : INTEGER := CNN_Sum_Offset;   --Test Bias without offset
+    CONSTANT Bias_Offset_Correction : INTEGER := CNN_Sum_Offset - Sum_Offset_Bias; --Offset to correct after sum
+
      --Save Bias seperately in one constant -----
     FUNCTION Init_Bias ( weights_in : CNN_Weights_T; filters : NATURAL; inputs : NATURAL; Offset_In : INTEGER) RETURN  CNN_Weights_T IS
     VARIABLE Bias_Const    : CNN_Weights_T(0 to filters-1, 0 to 0);
 BEGIN
     FOR i in 0 to filters-1 LOOP
-        if Offset_In >= 0 then
-            Bias_Const(i,0) := weights_in(i,inputs)/(2**Offset_In);
-        else
-            Bias_Const(i,0) := weights_in(i,inputs)*(2**(Offset_In*(-1)));
-        end if;
+        --Bias_Const(i,0) := adjust_offset(weights_in(i,inputs), Offset_In-Offset);
+        Bias_Const(i,0) := adjust_offset(weights_in(i,inputs), Bias_Offset_Fixed);
     END LOOP;
     
     return Bias_Const;
@@ -205,17 +209,20 @@ BEGIN
                 --Values for multiple outputs can be calculated
                 FOR o in 0 to Calc_Outputs-1 LOOP
                     --Add bias with weight offset
-                    IF (Offset >= 0) THEN
-                        Sum_Reg(o) := resize(Sum_Reg(o) + resize(shift_left (to_signed(Bias_Const(o+Output_Bias_Reg*Calc_Outputs, 0), CNN_Weight_Resolution+Offset), Offset),bits_max+1),bits_max+1);
+                    --Sum_Reg(o) := resize(Sum_Reg(o) + resize(shift_with_rounding(to_signed(Bias_Const(o+Output_Bias_Reg*Calc_Outputs, 0), CNN_Weight_Resolution+Offset), Offset*(-1)),bits_max+1),bits_max+1);
+                    --Sum_Reg(o) := resize(Sum_Reg(o) + to_signed(Bias_Const(o+Output_Bias_Reg*Calc_Outputs, 0), bits_max+1),bits_max+1);
+                    IF CNN_Rounding(1) = '1' THEN
+                        Sum_Reg(o) := resize(shift_with_rounding(Sum_Reg(o), Sum_Offset_Bias) + to_signed(Bias_Const(o+Output_Bias_Reg*Calc_Outputs, 0), bits_max+1),bits_max+1);
                     ELSE
-                        Sum_Reg(o) := resize(Sum_Reg(o) + resize(shift_right(to_signed(Bias_Const(o+Output_Bias_Reg*Calc_Outputs, 0), CNN_Weight_Resolution), abs(Offset)),bits_max+1),bits_max+1);
+                        Sum_Reg(o) := resize(shift_bits(Sum_Reg(o), Sum_Offset_Bias) + to_signed(Bias_Const(o+Output_Bias_Reg*Calc_Outputs, 0), bits_max+1),bits_max+1);
                     END IF;
-                    
+
                     --Apply output offset with relative offset from this and last layer
-                    IF (Offset_Diff > 0) THEN
-                        Sum_Reg(o) := shift_right(Sum_Reg(o), Offset_Diff);
-                    ELSIF (Offset_Diff < 0) THEN
-                        Sum_Reg(o) := shift_left(Sum_Reg(o), abs(Offset_Diff));
+                    --Sum_Reg(o) := shift_with_rounding(Sum_Reg(o), Offset_Diff);
+                    IF CNN_Rounding(2) = '1' THEN
+                        Sum_Reg(o) := shift_with_rounding(Sum_Reg(o), Offset_Diff+Bias_Offset_Correction);
+                    ELSE
+                        Sum_Reg(o) := shift_bits(Sum_Reg(o), Offset_Diff+Bias_Offset_Correction);
                     END IF;
                     
                     --Apply Activation function
@@ -269,7 +276,11 @@ BEGIN
                 --Calculate the output values
                 FOR o in 0 to Calc_Outputs-1 LOOP
                     FOR i in 0 to Inputs/Input_Cycles-1 LOOP
-                        sum(o) := resize(sum(o) + resize(shift_right(to_signed(iData_Reg(i) * Weights_Buf(o, i)  + (2**(CNN_Weight_Resolution-Offset-2)), CNN_Value_Resolution+CNN_Weight_Resolution), CNN_Weight_Resolution-Offset-1),bits_max+1),bits_max+1);
+                        IF CNN_Rounding(0) = '1' THEN
+                            sum(o) := resize(sum(o) + resize(shift_with_rounding(to_signed(iData_Reg(i) * Weights_Buf(o, i), CNN_Value_Resolution+CNN_Weight_Resolution), CNN_Weight_Resolution-Offset-1-CNN_Sum_Offset),bits_max+1),bits_max+1);
+                        else
+                            sum(o) := resize(sum(o) + resize(shift_bits(to_signed(iData_Reg(i) * Weights_Buf(o, i), CNN_Value_Resolution+CNN_Weight_Resolution), CNN_Weight_Resolution-Offset-1-CNN_Sum_Offset),bits_max+1),bits_max+1);
+                        END IF;
                     END LOOP;
                 END LOOP;
                 
@@ -279,6 +290,9 @@ BEGIN
                     IF (Output_Cnt = Calc_Cycles-1) THEN
                         Last_Input <= '1';
                     END IF;
+                    --For o in 0 to Calc_Outputs-1 LOOP
+                    --    Sum_Reg(o)  := shift_with_rounding(sum(o), CNN_Sum_Offset);
+                    --END LOOP;
                     Sum_Reg  := sum;
                     Add_Bias <= true;
                 END IF;
@@ -303,66 +317,66 @@ BEGIN
                 --Count through all calculation steps
                 IF (iCycle = 0) THEN
                     Element_Cnt := 0;
-                ELSE
-                    Element_Cnt := Element_Cnt + 1;
-                END IF;
-            ELSIF (Output_Cnt < Calc_Cycles-1) THEN
-                --Count through output values that are calculated
-                Output_Cnt  := Output_Cnt + 1;
-                Element_Cnt := Element_Cnt + 1;
-            ELSE
-                Calc_En    <= false;
-            END IF;
-            
-            --Load last sum for this filter from the RAM
-            SUM_Wr_Addr <= SUM_Rd_Addr;
-            SUM_Rd_Addr <= Output_Cnt;
-            
-            --Load Weights from ROM for this output and step of the calculation
-            IF (iStream.Data_Valid = '1' OR Calc_En) THEN
-                IF (Element_Cnt < Calc_Cycles*Input_Cycles-1) THEN
-                    ROM_Addr <= Element_Cnt + 1;
-                ELSE
-                    ROM_Addr <= 0;
-                END IF;
-            END IF;
-
-            Out_Ready <= '0';
-            
-             --Count through results of this neural network
-            IF (Last_Input = '1') THEN
-                Out_Cycle_Cnt := 0;
-                Out_Delay_Cnt <= 0;
-                Out_Ready     <= '1';
-            ELSIF (Out_Delay_Cnt < Output_Delay-1) THEN      --Add a delay between the output data
-                Out_Delay_Cnt <= Out_Delay_Cnt + 1;
-            ELSIF (Out_Cycle_Cnt_Reg < Output_Cycles-1) THEN --Count through Filters for the output
-                Out_Delay_Cnt <= 0;
-                Out_Cycle_Cnt := Out_Cycle_Cnt_Reg + 1;
-                Out_Ready     <= '1';
-            END IF;
-            
-            --Read output value from RAM
-            Out_Cycle_Cnt_Reg  <= Out_Cycle_Cnt;
-            OUT_Rd_Addr        <= Out_Cycle_Cnt / (Output_Cycles/OUT_RAM_Elements);
-            
-            --If the output is calculated, read from RAM and set oStream
-            IF (Out_Delay_Cnt = 0) THEN
-                FOR i in 0 to Out_Values-1 LOOP
-                    IF (Output_Cycles = OUT_RAM_Elements) THEN
-                        oData(i) <= to_integer(OUT_Rd_Data(i));
-                    ELSE
-                        oData(i) <= to_integer(OUT_Rd_Data(i+(Out_Cycle_Cnt_Reg mod (Output_Cycles/OUT_RAM_Elements))*Out_Values));
+                    ELSIF(element_cnt < Calc_Cycles*Input_Cycles-1) THEN
+                        Element_Cnt := Element_Cnt + 1;
                     END IF;
-                END LOOP;
+                ELSIF (Output_Cnt < Calc_Cycles-1 and element_cnt < Calc_Cycles*Input_Cycles-1) THEN
+                --Count through output values that are calculated
+                    Output_Cnt  := Output_Cnt + 1;
+                    Element_Cnt := Element_Cnt + 1;
+                ELSE
+                    Calc_En    <= false;
+                END IF;
                 
-                oCycle             <= Out_Cycle_Cnt_Reg;
-                oStream.Data_Valid <= Out_Ready;
-            ELSE
-                oStream.Data_Valid <= '0';
+            --Load last sum for this filter from the RAM
+                SUM_Wr_Addr <= SUM_Rd_Addr;
+                SUM_Rd_Addr <= Output_Cnt;
+                
+            --Load Weights from ROM for this output and step of the calculation
+                IF (iStream.Data_Valid = '1' OR Calc_En) THEN
+                    IF (Element_Cnt < Calc_Cycles*Input_Cycles-1) THEN
+                        ROM_Addr <= Element_Cnt + 1;
+                    ELSE
+                        ROM_Addr <= 0;
+                    END IF;
+                END IF;
+
+                Out_Ready <= '0';
+                
+             --Count through results of this neural network
+                IF (Last_Input = '1') THEN
+                    Out_Cycle_Cnt := 0;
+                    Out_Delay_Cnt <= 0;
+                    Out_Ready     <= '1';
+                ELSIF (Out_Delay_Cnt < Output_Delay-1) THEN      --Add a delay between the output data
+                    Out_Delay_Cnt <= Out_Delay_Cnt + 1;
+                ELSIF (Out_Cycle_Cnt_Reg < Output_Cycles-1) THEN --Count through Filters for the output
+                    Out_Delay_Cnt <= 0;
+                    Out_Cycle_Cnt := Out_Cycle_Cnt_Reg + 1;
+                    Out_Ready     <= '1';
+                END IF;
+                
+            --Read output value from RAM
+                Out_Cycle_Cnt_Reg  <= Out_Cycle_Cnt;
+                OUT_Rd_Addr        <= Out_Cycle_Cnt / (Output_Cycles/OUT_RAM_Elements);
+                
+            --If the output is calculated, read from RAM and set oStream
+                IF (Out_Delay_Cnt = 0) THEN
+                    FOR i in 0 to Out_Values-1 LOOP
+                        IF (Output_Cycles = OUT_RAM_Elements) THEN
+                            oData(i) <= to_integer(OUT_Rd_Data(i));
+                        ELSE
+                            oData(i) <= to_integer(OUT_Rd_Data(i+(Out_Cycle_Cnt_Reg mod (Output_Cycles/OUT_RAM_Elements))*Out_Values));
+                        END IF;
+                    END LOOP;
+                    
+                    oCycle             <= Out_Cycle_Cnt_Reg;
+                    oStream.Data_Valid <= Out_Ready;
+                ELSE
+                    oStream.Data_Valid <= '0';
+                END IF;
+                
             END IF;
-            
-        END IF;
-    END PROCESS;
-    
-END BEHAVIORAL;
+        END PROCESS;
+        
+    END BEHAVIORAL;
