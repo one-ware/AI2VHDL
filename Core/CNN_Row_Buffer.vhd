@@ -182,6 +182,7 @@ BEGIN
             ELSE
                 Out_Column_Center      <= 0;
                 Out_Row_Center         <= (iStream.Row - (Filter_Rows-1)/2) mod Input_Rows;
+                RAM_Out_Row_Center     <= (RAM_In_Row - (Filter_Rows-1)/2) mod RAM_Rows;
             END IF;
             
             --Count through all steps in the data out process/the convolution calculation
